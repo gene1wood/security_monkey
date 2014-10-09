@@ -62,12 +62,17 @@ Needed for CORS whitelisting -- this should match the port you have configured n
 WEB_PATH
 --------
 
+USE_BROWSERID
+-------------
+
+Setting this to ``True`` will enable use of `Flask-Browserid <http://pythonhosted.org/Flask-BrowserID/>`_. This will cause Security Monkey to use `Persona <https://www.persona.org/>`_ (previously called Browserid) to authenticate users instead of using the password field in the local user table.
 
 Additional Options
 ------------------
 
 As Security Monkey uses Flask-Security for authentication see .. _Flask-Security: https://pythonhosted.org/Flask-Security/configuration.html for additional configuration options.
 
+If you enable use of Flask-Browserid there will be additional configuration options available. See .. _Flask-Browserid: http://pythonhosted.org/Flask-BrowserID/#optional-configuration
 
 Command line
 ==================

@@ -67,6 +67,45 @@ def load_user(email):
         user = User.query.filter(User.email == email).first()
     return user
 
+### Flask-Browserid ###
+from flask.ext.browserid import BrowserID
+
+def get_user(kwargs):
+    """
+    Given the response from BrowserID, finds or creates a user.
+    If a user can neither be found nor created, returns None.
+    """
+    # try to find the user
+    user = User.query.filter(User.email == kwargs['email']).first()
+    if user and kwargs['status'] == 'okay':
+        return user
+    # try to create the user
+    return create_browserid_user(kwargs)
+
+def create_browserid_user(kwargs):
+    """
+    takes browserid response and creates a user.
+    """
+    if kwargs['status'] == 'okay':
+        if kwargs['email'].endswith('@' + app.config.get('BROWSERID_DOMAIN')):
+            active = True
+        else:
+            active = False
+        user = User(email=kwargs['email'],
+                    active=active)
+        db.session.add(user)
+        db.session.commit()
+        db.session.close()
+        user = User.query.filter(User.email == kwargs['email']).first()
+        return user
+    else:
+        app.logger.error("Unable to create browserid user : %s" % kwargs)
+        return None
+
+if app.config.get('USE_BROWSERID'):
+    browser_id = BrowserID()
+    browser_id.user_loader(get_user)
+    browser_id.init_app(app)
 
 ### Flask-Security ###
 from flask.ext.security import Security, SQLAlchemyUserDatastore
