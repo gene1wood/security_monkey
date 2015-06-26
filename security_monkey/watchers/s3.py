@@ -25,13 +25,45 @@ from security_monkey.watcher import ChangeItem
 from security_monkey.exceptions import BotoConnectionIssue
 from security_monkey.exceptions import S3PermissionsIssue
 from security_monkey.exceptions import S3ACLReturnedNoneDisplayName
-from security_monkey.constants import IGNORE_PREFIX
 from security_monkey import app
 
 from boto.s3.connection import OrdinaryCallingFormat
 import boto
-import time
 import json
+
+
+def get_lifecycle_rules(bhandle):
+    lifecycle = []
+
+    try:
+        lc = bhandle.get_lifecycle_config()
+    except:
+        # throws an exception (404) when bucket has no lifecycle configurations
+        return lifecycle
+
+    for rule in lc:
+        lc_rule = {
+            'id': rule.id,
+            'status': rule.status,
+            'prefix': rule.prefix,
+        }
+
+        if rule.transition:
+            lc_rule['transition'] = {
+                'days': rule.transition.days,
+                'date': rule.transition.date,
+                'storage_class': rule.transition.storage_class
+            }
+
+        if rule.expiration:
+            lc_rule['expiration'] = {
+                'days': rule.expiration.days,
+                'date': rule.expiration.date
+            }
+
+        lifecycle.append(lc_rule)
+
+    return lifecycle
 
 
 class S3(Watcher):
@@ -50,6 +82,8 @@ class S3(Watcher):
         :returns: exception_map - A dict where the keys are a tuple containing the
             location of the exception and the value is the actual exception
         """
+        self.prep_for_slurp()
+
         item_list = []
         exception_map = {}
 
@@ -69,14 +103,7 @@ class S3(Watcher):
             for bucket in all_buckets:
                 app.logger.debug("Slurping %s (%s) from %s" % (self.i_am_singular, bucket.name, account))
 
-                ### Check if this bucket is on the Ignore List ###
-                ignore_item = False
-                for ignore_item_name in IGNORE_PREFIX[self.index]:
-                    if bucket.name.lower().startswith(ignore_item_name.lower()):
-                        ignore_item = True
-                        break
-
-                if ignore_item:
+                if self.check_ignore_list(bucket.name):
                     continue
 
                 try:
@@ -101,7 +128,8 @@ class S3(Watcher):
 
                     bhandle = self.wrap_aws_rate_limited_call(
                         s3regionconn.get_bucket,
-                        bucket
+                        bucket,
+                        validate=False
                     )
                     s3regionconn.close()
                 except Exception as e:
@@ -124,6 +152,7 @@ class S3(Watcher):
             return self.region_mappings[location]
         else:
             return location
+
 
     def conv_bucket_to_dict(self, bhandle, account, region, bucket_name, exception_map):
         """
@@ -179,6 +208,8 @@ class S3(Watcher):
         bucket_dict['versioning'] = self.wrap_aws_rate_limited_call(
             bhandle.get_versioning_status
         )
+
+        bucket_dict['lifecycle_rules'] = get_lifecycle_rules(bhandle)
 
         return bucket_dict
 

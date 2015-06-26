@@ -26,16 +26,18 @@ from security_monkey import db, app
 
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy import Column, Integer, String, DateTime, Boolean, Unicode
-from sqlalchemy.schema import ForeignKey
+from sqlalchemy.dialects.postgresql import CIDR
+from sqlalchemy.schema import ForeignKey, UniqueConstraint
 from sqlalchemy.orm import relationship
 from flask.ext.security import UserMixin, RoleMixin
 
 import datetime
 
 
-association_table = db.Table('association',
-                             Column('user_id', Integer, ForeignKey('user.id')),
-                             Column('account_id', Integer, ForeignKey('account.id'))
+association_table = db.Table(
+    'association',
+    Column('user_id', Integer, ForeignKey('user.id')),
+    Column('account_id', Integer, ForeignKey('account.id'))
 )
 
 
@@ -51,22 +53,28 @@ class Account(db.Model):
     notes = Column(String(256))
     s3_name = Column(String(32))
     number = Column(String(12))  # Not stored as INT because of potential leading-zeros.
-    items = relationship("Item", backref="account")
+    items = relationship("Item", backref="account", cascade="all, delete, delete-orphan")
+    issue_categories = relationship("AuditorSettings", backref="account")
 
 
 class Technology(db.Model):
     """
     meant to model AWS primatives (elb, s3, iamuser, iamgroup, etc.)
-    """ 
+    """
     __tablename__ = 'technology'
     id = Column(Integer, primary_key=True)
     name = Column(String(32))  # elb, s3, iamuser, iamgroup, etc.
     items = relationship("Item", backref="technology")
+    issue_categories = relationship("AuditorSettings", backref="technology")
+    ignore_items = relationship("IgnoreListEntry", backref="technology")
 
 
-roles_users = db.Table('roles_users',
-                       db.Column('user_id', db.Integer(), db.ForeignKey('user.id')),
-                       db.Column('role_id', db.Integer(), db.ForeignKey('role.id')))
+roles_users = db.Table(
+    'roles_users',
+    db.Column('user_id', db.Integer(), db.ForeignKey('user.id')),
+    db.Column('role_id', db.Integer(), db.ForeignKey('role.id'))
+)
+
 
 class Role(db.Model, RoleMixin):
     """
@@ -76,7 +84,7 @@ class Role(db.Model, RoleMixin):
     id = db.Column(db.Integer(), primary_key=True)
     name = db.Column(db.String(80), unique=True)
     description = db.Column(db.String(255))
-    
+
 
 class User(db.Model, UserMixin):
     """
@@ -115,6 +123,21 @@ class ItemAudit(db.Model):
     justification = Column(String(512))
     justified_date = Column(DateTime(), default=datetime.datetime.utcnow, nullable=True)
     item_id = Column(Integer, ForeignKey("item.id"), nullable=False)
+    auditor_setting_id = Column(Integer, ForeignKey("auditorsettings.id"), nullable=True)
+
+
+class AuditorSettings(db.Model):
+    """
+    This table contains auditor disable settings.
+    """
+    __tablename__ = "auditorsettings"
+    id = Column(Integer, primary_key=True)
+    disabled = Column(Boolean(), nullable=False)
+    issue_text = Column(String(512), nullable=True)
+    issues = relationship("ItemAudit", backref="auditor_setting")
+    tech_id = Column(Integer, ForeignKey("technology.id"))
+    account_id = Column(Integer, ForeignKey("account.id"))
+    unique_const = UniqueConstraint('account_id', 'issue_text', 'tech_id')
 
 
 class Item(db.Model):
@@ -169,6 +192,30 @@ class ItemRevisionComment(db.Model):
     revision_id = Column(Integer, ForeignKey('itemrevision.id'), nullable=False)
     date_created = Column(DateTime(), default=datetime.datetime.utcnow, nullable=False)
     text = Column(Unicode(1024))
+
+
+class NetworkWhitelistEntry(db.Model):
+    """
+    This table contains user-entered CIDR's that security_monkey
+    will not alert on.
+    """
+    __tablename__ = "networkwhitelist"
+    id = Column(Integer, primary_key=True)
+    name = Column(String(512))
+    notes = Column(String(512))
+    cidr = Column(CIDR)
+
+
+class IgnoreListEntry(db.Model):
+    """
+    This table contains user-entered prefixes that security_monkey
+    will ignore when slurping the AWS config.
+    """
+    __tablename__ = "ignorelist"
+    id = Column(Integer, primary_key=True)
+    prefix = Column(String(512))
+    notes = Column(String(512))
+    tech_id = Column(Integer, ForeignKey("technology.id"), nullable=False)
 
 
 class Datastore(object):

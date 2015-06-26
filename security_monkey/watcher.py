@@ -13,12 +13,16 @@ from common.utils.PolicyDiff import PolicyDiff
 from common.utils.utils import sub_dict
 from security_monkey import app
 from security_monkey.datastore import Account
+from security_monkey.datastore import IgnoreListEntry, Technology
+from security_monkey.common.jinja import get_jinja_env
 
 from boto.exception import BotoServerError
 import time
 
 import datastore
-from sets import Set
+from copy import deepcopy
+import dpath.util
+from dpath.exceptions import PathNotFound
 
 
 class Watcher(object):
@@ -28,6 +32,8 @@ class Watcher(object):
     i_am_singular = 'Abstract'
     i_am_plural = 'Abstracts'
     rate_limit_delay = 0
+    ignore_list = []
+    interval = 15    #in minutes
 
     def __init__(self, accounts=None, debug=False):
         """Initializes the Watcher"""
@@ -41,7 +47,31 @@ class Watcher(object):
         self.created_items = []
         self.deleted_items = []
         self.changed_items = []
+        self.ephemeral_items = []
+        # TODO: grab these from DB, keyed on account
         self.rate_limit_delay = 0
+        self.interval = 15
+        self.honor_ephemerals = False
+        self.ephemeral_paths = []
+
+    def prep_for_slurp(self):
+        """
+        Should be run before slurp is run to grab the IgnoreList.
+        """
+        query = IgnoreListEntry.query
+        query = query.join((Technology, Technology.id == IgnoreListEntry.tech_id))
+        self.ignore_list = query.filter(Technology.name==self.index).all()
+
+    def check_ignore_list(self, name):
+        """
+        See if the given item has a name flagging it to be ignored by security_monkey.
+        """
+        for result in self.ignore_list:
+            if name.lower().startswith(result.prefix.lower()):
+                app.logger.warn("Ignoring {}/{} because of IGNORELIST prefix {}".format(self.index, name, result.prefix))
+                return True
+
+        return False
 
     def wrap_aws_rate_limited_call(self, awsfunc, *args, **nargs):
         attempts = 0
@@ -55,7 +85,7 @@ class Watcher(object):
                 retval = awsfunc(*args, **nargs)
 
                 if self.rate_limit_delay > 0:
-                    app.logger.warn(("Successfully Executed Rate-Limited Function. "+
+                    app.logger.warn(("Successfully Executed Rate-Limited Function. " +
                                      "Tech: {} Account: {}. "
                                      "Reducing sleep period from {} to {}")
                                     .format(self.index, self.accounts, self.rate_limit_delay, self.rate_limit_delay / 2))
@@ -66,12 +96,12 @@ class Watcher(object):
                 if e.error_code == 'Throttling':
                     if self.rate_limit_delay == 0:
                         self.rate_limit_delay = 1
-                        app.logger.warn(('Being rate-limited by AWS. Increasing delay on tech {} '+
+                        app.logger.warn(('Being rate-limited by AWS. Increasing delay on tech {} ' +
                                         'in account {} from 0 to 1 second. Attempt {}')
                                         .format(self.index, self.accounts, attempts))
                     elif self.rate_limit_delay < 16:
                         self.rate_limit_delay = self.rate_limit_delay * 2
-                        app.logger.warn(('Still being rate-limited by AWS. Increasing delay on tech {} '+
+                        app.logger.warn(('Still being rate-limited by AWS. Increasing delay on tech {} ' +
                                         'in account {} to {} seconds. Attempt {}')
                                         .format(self.index, self.accounts, self.rate_limit_delay, attempts))
                     else:
@@ -165,13 +195,13 @@ class Watcher(object):
         prev_map = {item.location(): item for item in previous}
         curr_map = {item.location(): item for item in current}
 
-        item_locations = list(Set(prev_map).difference(Set(curr_map)))
+        item_locations = list(set(prev_map).difference(set(curr_map)))
         item_locations = [item_location for item_location in item_locations if not self.locationInExceptionMap(item_location, exception_map)]
         list_deleted_items = [prev_map[item] for item in item_locations]
 
         for item in list_deleted_items:
             deleted_change_item = ChangeItem.from_items(old_item=item, new_item=None)
-            app.logger.debug("%s %s/%s/%s deleted" % (self.i_am_singular, item.account, item.region, item.name))
+            app.logger.debug("%s: %s/%s/%s deleted" % (self.i_am_singular, item.account, item.region, item.name))
             self.deleted_items.append(deleted_change_item)
 
     def find_new(self, previous=[], current=[]):
@@ -182,13 +212,13 @@ class Watcher(object):
         prev_map = {item.location(): item for item in previous}
         curr_map = {item.location(): item for item in current}
 
-        item_locations = list(Set(curr_map).difference(Set(prev_map)))
+        item_locations = list(set(curr_map).difference(set(prev_map)))
         list_new_items = [curr_map[item] for item in item_locations]
 
         for item in list_new_items:
             new_change_item = ChangeItem.from_items(old_item=None, new_item=item)
             self.created_items.append(new_change_item)
-            app.logger.debug("%s %s/%s/%s created" % (self.i_am_singular, item.account, item.region, item.name))
+            app.logger.debug("%s: %s/%s/%s created" % (self.i_am_singular, item.account, item.region, item.name))
 
     def find_modified(self, previous=[], current=[], exception_map={}):
         """
@@ -198,16 +228,48 @@ class Watcher(object):
         prev_map = {item.location(): item for item in previous}
         curr_map = {item.location(): item for item in current}
 
-        item_locations = list(Set(curr_map).intersection(Set(prev_map)))
+        item_locations = list(set(curr_map).intersection(set(prev_map)))
         item_locations = [item_location for item_location in item_locations if not self.locationInExceptionMap(item_location, exception_map)]
 
         for location in item_locations:
             prev_item = prev_map[location]
             curr_item = curr_map[location]
+            # ChangeItem with and without ephemeral changes
+            eph_change_item = None
+            dur_change_item = None
+
             if not sub_dict(prev_item.config) == sub_dict(curr_item.config):
-                change_item = ChangeItem.from_items(old_item=prev_item, new_item=curr_item)
-                self.changed_items.append(change_item)
-                app.logger.debug("%s %s/%s/%s changed" % (self.i_am_singular, change_item.account, change_item.region, change_item.name))
+                eph_change_item = ChangeItem.from_items(old_item=prev_item, new_item=curr_item)
+
+            if self.ephemerals_skipped():
+                # deepcopy configs before filtering
+                dur_prev_item = deepcopy(prev_item)
+                dur_curr_item = deepcopy(curr_item)
+                # filter-out ephemeral paths in both old and new config dicts
+                for path in self.ephemeral_paths:
+                    for cfg in [dur_prev_item.config, dur_curr_item.config]:
+                        try:
+                            dpath.util.delete(cfg, path, separator='$')
+                        except PathNotFound:
+                            pass
+
+                # now, compare only non-ephemeral paths
+                if not sub_dict(dur_prev_item.config) == sub_dict(dur_curr_item.config):
+                    dur_change_item = ChangeItem.from_items(old_item=dur_prev_item, new_item=dur_curr_item)
+
+                # store all changes, divided in specific categories
+                if eph_change_item:
+                    self.ephemeral_items.append(eph_change_item)
+                    app.logger.debug("%s: ephemeral changes in item %s/%s/%s" % (self.i_am_singular, eph_change_item.account, eph_change_item.region, eph_change_item.name))
+                if dur_change_item:
+                    self.changed_items.append(dur_change_item)
+                    app.logger.debug("%s: durable changes in item %s/%s/%s" % (self.i_am_singular, dur_change_item.account, dur_change_item.region, dur_change_item.name))
+
+            elif eph_change_item is not None:
+                # store all changes, handle them all equally
+                self.changed_items.append(eph_change_item)
+                app.logger.debug("%s: changes in item %s/%s/%s" % (self.i_am_singular, eph_change_item.account, eph_change_item.region, eph_change_item.name))
+
 
     def find_changes(self, current=[], exception_map={}):
         """
@@ -261,9 +323,22 @@ class Watcher(object):
         Runs through any changed items to see if any have issues.
         :return: boolean whether any changed items have issues
         """
+        has_issues = False
+        has_new_issue = False
+        has_unjustified_issue = False
         for item in self.created_items + self.changed_items:
             if item.audit_issues:
-                return True
+                has_issues = True
+                if item.found_new_issue:
+                    has_new_issue = True
+                    has_unjustified_issue = True
+                    break
+                for issue in item.confirmed_existing_issues:
+                    if not issue.justified:
+                        has_unjustified_issue = True
+                        break
+
+        return has_issues, has_new_issue, has_unjustified_issue
 
     def save(self):
         """
@@ -271,9 +346,17 @@ class Watcher(object):
         """
         app.logger.info("{} deleted {} in {}".format(len(self.deleted_items), self.i_am_plural, self.accounts))
         app.logger.info("{} created {} in {}".format(len(self.created_items), self.i_am_plural, self.accounts))
-        app.logger.info("{} changed {} in {}".format(len(self.changed_items), self.i_am_plural, self.accounts))
+        for item in self.created_items + self.deleted_items:
+            item.save(self.datastore)
 
-        for item in self.created_items + self.changed_items + self.deleted_items:
+        if self.ephemerals_skipped():
+            changes_tot = len(self.ephemeral_items)
+            changeset = self.ephemeral_items
+        else:
+            changes_tot = len(self.changed_items)
+            changeset = self.changed_items
+        app.logger.info("{} changed {} in {}".format(changes_tot, self.i_am_plural, self.accounts))
+        for item in changeset:
             item.save(self.datastore)
 
     def plural_name(self):
@@ -290,6 +373,14 @@ class Watcher(object):
         """
         return self.i_am_singular
 
+    def get_interval(self):
+        """ Returns interval time (in minutes) """
+        return self.interval
+
+    def ephemerals_skipped(self):
+        """ Returns whether ephemerals locations are ignored """
+        return self.honor_ephemerals
+
 
 class ChangeItem(object):
     """
@@ -305,6 +396,10 @@ class ChangeItem(object):
         self.new_config = new_config
         self.active = active
         self.audit_issues = audit_issues or []
+        self.confirmed_new_issues = []
+        self.confirmed_fixed_issues = []
+        self.confirmed_existing_issues = []
+        self.found_new_issue = False
 
     @classmethod
     def from_items(cls, old_item=None, new_item=None):
@@ -338,25 +433,31 @@ class ChangeItem(object):
         """
         return (self.index, self.account, self.region, self.name)
 
+    def get_pdiff_html(self):
+        pdiff = PolicyDiff(self.new_config, self.old_config)
+        return pdiff.produceDiffHTML()
+
+    def _dict_for_template(self):
+        return {
+            'account': self.account,
+            'region': self.region,
+            'name': self.name,
+            'confirmed_new_issues': self.confirmed_new_issues,
+            'confirmed_fixed_issues': self.confirmed_fixed_issues,
+            'confirmed_existing_issues': self.confirmed_existing_issues,
+            'pdiff_html': self.get_pdiff_html()
+        }
+
     def description(self):
         """
         Provide an HTML description of the object for change emails and the Jinja templates.
         :return: string of HTML desribing the object.
         """
-        ret = u"<h2>{0.account}/{0.region}/{1}:</h2><br/>".format(self, self.name)
-        pdiff = PolicyDiff(self.new_config, self.old_config)
-        ret += pdiff.produceDiffHTML()
-        if len(self.audit_issues) > 0:
-            ret += "<h3>Audit Items: {}</h3>".format(len(self.audit_issues))
-            for issue in self.audit_issues:
-                ret += "Score: {}<br/>".format(issue.score)
-                ret += "Issue: {}<br/>".format(issue.issue)
-                ret += "Notes: {}<br/>".format(issue.notes)
-                if issue.justified:
-                    ret += "Justification: {} on {} by {}<br/>".format(issue.justification, issue.justified_date, issue.user.name)
-                ret += "<br/>"
-
-        return ret
+        jenv = get_jinja_env()
+        template = jenv.get_template('jinja_change_item.html')
+        body = template.render(self._dict_for_template())
+        # app.logger.info(body)
+        return body
 
     def save(self, datastore):
         """

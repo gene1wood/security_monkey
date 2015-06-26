@@ -46,13 +46,21 @@ SECURITY_POST_CONFIRM_VIEW = BASE_URL
 SECURITY_POST_RESET_VIEW = BASE_URL
 SECURITY_POST_CHANGE_VIEW = BASE_URL
 
-# This address gets all change notifications
-SECURITY_TEAM_EMAIL = ['securityteam@example.com']
+# This address gets all change notifications (i.e. 'securityteam@example.com')
+SECURITY_TEAM_EMAIL = []
 
 # These are only required if using SMTP instead of SES
 EMAILS_USE_SMTP = False     # Otherwise, Use SES
+SES_REGION = 'us-east-1'
 MAIL_SERVER = 'smtp.example.com'
 MAIL_PORT = 465
 MAIL_USE_SSL = True
 MAIL_USERNAME = 'username'
 MAIL_PASSWORD = 'password'
+
+WTF_CSRF_ENABLED = True
+WTF_CSRF_SSL_STRICT = True # Checks Referer Header. Set to False for API access.
+WTF_CSRF_METHODS = ['DELETE', 'POST', 'PUT', 'PATCH']
+
+# "NONE", "SUMMARY", or "FULL"
+SECURITYGROUP_INSTANCE_DETAIL = 'FULL'

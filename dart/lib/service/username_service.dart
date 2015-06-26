@@ -1,5 +1,6 @@
 library security_monkey.username_service;
 
+import '../util/constants.dart';
 import 'package:angular/angular.dart';
 import 'dart:async';
 import 'dart:html';
@@ -7,30 +8,35 @@ import 'dart:html';
 @Injectable()
 class UsernameService {
 
-  String name = "";
-  Scope scope;
+    String name = "";
+    Scope scope;
 
-  UsernameService(this.scope) {
-    //http://stackoverflow.com/questions/22151427/how-to-communicate-between-angular-dart-controllers
-    Stream username_change_stream = scope.on('username-change');
-    username_change_stream.listen(usernameChange);
+    UsernameService(Scope scope) {
+        //http://stackoverflow.com/questions/22151427/how-to-communicate-between-angular-dart-controllers
+        Stream username_change_stream = scope.on('username-change');
+        username_change_stream.listen(usernameChange);
 
-    Stream authurl_change_stream = scope.on('authurl-change');
-    authurl_change_stream.listen(authURLChange);
-  }
-
-  void authURLChange(ScopeEvent e) {
-    String auth_url = e.data;
-    if(auth_url.isNotEmpty) {
-      window.location.assign(auth_url);
+        Stream authurl_change_stream = scope.on('authurl-change');
+        authurl_change_stream.listen(authURLChange);
     }
-  }
 
-  void usernameChange(ScopeEvent e) {
-    this.name = e.data;
-  }
+    void authURLChange(ScopeEvent e) {
+        String auth_url = e.data;
+        if (auth_url.isNotEmpty) {
+            if (REMOTE_AUTH) {
+                window.location.assign(auth_url);
+            } else {
+                var url = Uri.encodeComponent(window.location.href);
+                window.location.assign('/login?next=$url');
+            }
+        }
+    }
 
-  get signed_in => name.isNotEmpty;
+    void usernameChange(ScopeEvent e) {
+        this.name = e.data;
+    }
+
+    get signed_in => name.isNotEmpty;
 
 }
 
