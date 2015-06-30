@@ -1,4 +1,4 @@
-#     Copyright 2014 Netflix, Inc.
+# Copyright 2014 Netflix, Inc.
 #
 #     Licensed under the Apache License, Version 2.0 (the "License");
 #     you may not use this file except in compliance with the License.
@@ -23,8 +23,16 @@
 from security_monkey.auditor import Auditor
 from security_monkey.watchers.security_group import SecurityGroup
 from security_monkey.datastore import NetworkWhitelistEntry
+from security_monkey import app
 
 import ipaddr
+
+
+def _check_empty_security_group(sg_item):
+    if app.config.get('SECURITYGROUP_INSTANCE_DETAIL', None) in ['SUMMARY', 'FULL'] and \
+            not sg_item.config.get("assigned_to", None):
+        return 0
+    return 1
 
 
 class SecurityGroupAuditor(Auditor):
@@ -79,10 +87,12 @@ class SecurityGroupAuditor(Auditor):
         if sg_item.config.get("vpc_id", None):
             return
 
+        multiplier = _check_empty_security_group(sg_item)
+
         for rule in sg_item.config.get("rules", []):
             cidr = rule.get("cidr_ip", None)
             if cidr and self._check_rfc_1918(cidr):
-                self.add_issue(severity, tag, sg_item, notes=cidr)
+                self.add_issue(severity * multiplier, tag, sg_item, notes=cidr)
 
     def check_securitygroup_rule_count(self, sg_item):
         """
@@ -90,14 +100,18 @@ class SecurityGroupAuditor(Auditor):
         """
         tag = "Security Group contains 50 or more rules"
         severity = 1
+        multiplier = _check_empty_security_group(sg_item)
+
         rules = sg_item.config.get('rules', [])
         if len(rules) >= 50:
-            self.add_issue(severity, tag, sg_item)
+            self.add_issue(severity * multiplier, tag, sg_item)
 
     def check_securitygroup_large_port_range(self, sg_item):
         """
         Make sure the SG does not contain large port ranges.
         """
+        multiplier = _check_empty_security_group(sg_item)
+
         for rule in sg_item.config.get("rules", []):
             if rule['from_port'] == rule['to_port']:
                 continue
@@ -118,15 +132,15 @@ class SecurityGroupAuditor(Auditor):
             note = "{} on {}".format(name, self.__port_for_rule__(rule))
 
             if range_size > 2500:
-                self.add_issue(4, "Port Range > 2500 Ports", sg_item, notes=note)
+                self.add_issue(4 * multiplier, "Port Range > 2500 Ports", sg_item, notes=note)
                 continue
 
             if range_size > 750:
-                self.add_issue(3, "Port Range > 750 Ports", sg_item, notes=note)
+                self.add_issue(3 * multiplier, "Port Range > 750 Ports", sg_item, notes=note)
                 continue
 
             if range_size > 250:
-                self.add_issue(1, "Port Range > 250 Ports", sg_item, notes=note)
+                self.add_issue(1 * multiplier, "Port Range > 250 Ports", sg_item, notes=note)
                 continue
 
     def check_securitygroup_large_subnet(self, sg_item):
@@ -135,6 +149,8 @@ class SecurityGroupAuditor(Auditor):
         """
         tag = "Security Group network larger than /24"
         severity = 3
+        multiplier = _check_empty_security_group(sg_item)
+
         for rule in sg_item.config.get("rules", []):
             cidr = rule.get("cidr_ip", None)
             if cidr and not self._check_inclusion_in_network_whitelist(cidr):
@@ -142,7 +158,7 @@ class SecurityGroupAuditor(Auditor):
                     mask = int(cidr.split('/')[1])
                     if mask < 24 and mask > 0:
                         notes = "{} on {}".format(cidr, self.__port_for_rule__(rule))
-                        self.add_issue(severity, tag, sg_item, notes=notes)
+                        self.add_issue(severity * multiplier, tag, sg_item, notes=notes)
 
     def check_securitygroup_zero_subnet(self, sg_item):
         """
@@ -150,13 +166,15 @@ class SecurityGroupAuditor(Auditor):
         """
         tag = "Security Group subnet mask is /0"
         severity = 10
+        multiplier = _check_empty_security_group(sg_item)
+
         for rule in sg_item.config.get("rules", []):
             cidr = rule.get("cidr_ip", None)
             if cidr and '/' in cidr and not cidr == "0.0.0.0/0" and not cidr == "10.0.0.0/8":
                 mask = int(cidr.split('/')[1])
                 if mask == 0:
                     notes = "{} on {}".format(cidr, self.__port_for_rule__(rule))
-                    self.add_issue(severity, tag, sg_item, notes=notes)
+                    self.add_issue(severity * multiplier, tag, sg_item, notes=notes)
 
     def check_securitygroup_any(self, sg_item):
         """
@@ -164,11 +182,13 @@ class SecurityGroupAuditor(Auditor):
         """
         tag = "Security Group contains 0.0.0.0/0"
         severity = 5
+        multiplier = _check_empty_security_group(sg_item)
+
         for rule in sg_item.config.get("rules", []):
             cidr = rule.get("cidr_ip")
             if "0.0.0.0/0" == cidr:
                 notes = "{} on {}".format(cidr, self.__port_for_rule__(rule))
-                self.add_issue(severity, tag, sg_item, notes=notes)
+                self.add_issue(severity * multiplier, tag, sg_item, notes=notes)
 
     def check_securitygroup_10net(self, sg_item):
         """
@@ -180,8 +200,10 @@ class SecurityGroupAuditor(Auditor):
         if sg_item.config.get("vpc_id", None):
             return
 
+        multiplier = _check_empty_security_group(sg_item)
+
         for rule in sg_item.config.get("rules", []):
             cidr = rule.get("cidr_ip")
             if "10.0.0.0/8" == cidr:
                 notes = "{} on {}".format(cidr, self.__port_for_rule__(rule))
-                self.add_issue(severity, tag, sg_item, notes=notes)
+                self.add_issue(severity * multiplier, tag, sg_item, notes=notes)

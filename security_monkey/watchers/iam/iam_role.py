@@ -12,7 +12,7 @@
 #     See the License for the specific language governing permissions and
 #     limitations under the License.
 """
-.. module: security_monkey.watchers.iam_role
+.. module: security_monkey.watchers.iam.iam_role
     :platform: Unix
 
 .. version:: $$VERSION$$
@@ -29,6 +29,25 @@ from security_monkey import app
 
 import json
 import urllib
+
+
+def all_managed_policies(conn):
+    managed_policies = {}
+
+    for policy in conn.policies.all():
+        for attached_role in policy.attached_roles.all():
+            policy_dict = {
+                "name": policy.policy_name,
+                "arn": policy.arn,
+                "version": policy.default_version_id
+            }
+
+            if attached_role.arn not in managed_policies:
+                managed_policies[attached_role.arn] = [policy_dict]
+            else:
+                managed_policies[attached_role.arn].append(policy_dict)
+
+    return managed_policies
 
 
 class IAMRole(Watcher):
@@ -62,7 +81,8 @@ class IAMRole(Watcher):
         while True:
             policynames_response = self.wrap_aws_rate_limited_call(
                 iam.list_role_policies,
-                role.role_name
+                role.role_name,
+                marker=marker
             )
             all_policy_names.extend(policynames_response.policy_names)
 
@@ -86,9 +106,10 @@ class IAMRole(Watcher):
         from security_monkey.common.sts_connect import connect
         for account in self.accounts:
             try:
+                iam_b3 = connect(account, 'iam_boto3')
+                managed_policies = all_managed_policies(iam_b3)
 
                 iam = connect(account, 'iam')
-
                 all_roles = []
                 marker = None
                 while True:
@@ -112,6 +133,9 @@ class IAMRole(Watcher):
 
                 if self.check_ignore_list(role.role_name):
                     continue
+
+                if managed_policies.has_key(role.arn):
+                    item_config['managed_policies'] = managed_policies.get(role.arn)
 
                 assume_role_policy_document = role.get('assume_role_policy_document', '')
                 assume_role_policy_document = urllib.unquote(assume_role_policy_document)

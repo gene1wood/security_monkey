@@ -2,6 +2,65 @@
 Changelog
 *********
 
+v0.3.6 (2015-04-09)
+===================
+- Changes to issue score in code will now cause all existing issues to be re-scored in the database.
+- A new configuration parameter called SECURITYGROUP_INSTANCE_DETAIL can now be set to:
+    - "FULL": Security Groups will display each instances, and all instance tags, that are associated with the security group.
+    - "SUMMARY": Security Groups will display the number of instances attached to the security group.
+    - "NONE": Security Groups will not retrieve any data about instances attached to a security group.
+    - If SECURITY_GROUP_INSTANCE_DETAIL is set to "FULL" or "SUMMARY", empty security groups audit issues will have their score set to zero.
+    - For accounts with many thousands of instances, it is advised to set this to "NONE" as the AWS API's do not respond in a timely manner with that many instances.
+- Each watcher can be set to run at a different interval in code.  We will want to move this to be a UI setting.
+- Watchers may specify a list of ephemeral paths.  Security_monkey will not send out change alerts for items in the ephemeral section.  This is a good place for metadata that is often changing like the number of instances attached to a security_group or the number of remaining IP addresses in a VPC subnet.
+
+Contributors:
+- lucab
+- monkeysecurity
+
+v0.3.5 (2015-03-28)
+===================
+- Adding policy minimizer & expander to the revision component
+- Adding tracking of instance profiles attached to a role
+- Adding marker/pagination code to redshift.describe_clusters()
+- Adding pagination to IAM User get_all_user_policies, get_all_access_keys, get_all_mfa_devices, get_all_signing_certs
+- Typo & minor corrections on postgres commands
+- CLI command to save your current configurations to a JSON file for backup
+- added a VPC watcher
+- Adding DHCP Options and Internet Gateways to the VPC Watcher
+- Adding a subnet watcher. Fixing the VPC watcher with deep_dict
+- Adding the vpc route_table watcher
+- Removing subnet remaining IP field until ephemeral section is merged in
+- Adding IAM Managed Policies
+- Typo & minor corrections on postgres commands in documentation
+- Adds ELBSecurityPolicy-2015-03. Moves export grade ciphers to their own section and alerts on FREAK vuln.
+- Provides context on refpol 2015-03 vs 2015-02.
+- Adding a Managed Policies Auditor
+- Added Manged Policy tracking to the IAM users, groups, and roles
+
+
+Summary of new watchers:
+
+- vpc
+    - DHCP Options
+    - Internet Gateways
+- subnet
+- routetable
+- managed policies
+
+
+Summary of new Auditors or audit checks:
+
+- managed policies
+- New reference policy 2015-03 for ELB listeners.
+- New alerts for FREAK vulnerable ciphers.
+
+
+Contributors:
+
+- markofu
+- monkeysecurity
+
 v0.3.4 (2015-2-19)
 ==================
 - Merged in a new AuditorSettings tab created by Qmando at Yelp enabling you to disable audit checks with per-account granularity.

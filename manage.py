@@ -22,6 +22,7 @@ from flask.ext.migrate import Migrate, MigrateCommand
 from security_monkey.scheduler import run_change_reporter as sm_run_change_reporter
 from security_monkey.scheduler import find_changes as sm_find_changes
 from security_monkey.scheduler import audit_changes as sm_audit_changes
+from security_monkey.backup import backup_config_to_json as sm_backup_config_to_json
 
 manager = Manager(app)
 migrate = Migrate(app, db)
@@ -55,12 +56,36 @@ def audit_changes(accounts, monitors, send_report):
     sm_audit_changes(accounts, monitors, send_report)
 
 
+@manager.option('-a', '--accounts', dest='accounts', type=unicode, default=u'all')
+@manager.option('-m', '--monitors', dest='monitors', type=unicode, default=u'all')
+@manager.option('-o', '--outputfolder', dest='outputfolder', type=unicode, default=u'backups')
+def backup_config_to_json(accounts, monitors, outputfolder):
+    """Saves the most current item revisions to a json file."""
+    sm_backup_config_to_json(accounts, monitors, outputfolder)
+
+
 @manager.command
 def start_scheduler():
     """ starts the python scheduler to run the watchers and auditors"""
     from security_monkey import scheduler
     scheduler.setup_scheduler()
     scheduler.scheduler.start()
+
+
+@manager.option('-u', '--number', dest='number', type=unicode, required=True)
+@manager.option('-a', '--active', dest='active', type=bool, default=True)
+@manager.option('-t', '--thirdparty', dest='third_party', type=bool, default=False)
+@manager.option('-n', '--name', dest='name', type=unicode, required=True)
+@manager.option('-s', '--s3name', dest='s3_name', type=unicode, default=u'')
+@manager.option('-o', '--notes', dest='notes', type=unicode, default=u'')
+@manager.option('-f', '--force', dest='force', help='Override existing accounts', action='store_true')
+def add_account(number, third_party, name, s3_name, active, notes, force):
+    from security_monkey.common.utils.utils import add_account
+    res = add_account(number, third_party, name, s3_name, active, notes, force)
+    if res:
+        app.logger.info('Successfully added account {}'.format(name))
+    else:
+        app.logger.info('Account with id {} already exists'.format(number))
 
 
 class APIServer(Command):

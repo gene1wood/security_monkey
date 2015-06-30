@@ -12,7 +12,7 @@
 #     See the License for the specific language governing permissions and
 #     limitations under the License.
 """
-.. module: security_monkey.watchers.iam_user
+.. module: security_monkey.watchers.iam.iam_user
     :platform: Unix
 
 .. version:: $$VERSION$$
@@ -30,6 +30,25 @@ import json
 import urllib
 
 
+def all_managed_policies(conn):
+    managed_policies = {}
+
+    for policy in conn.policies.all():
+        for attached_user in policy.attached_users.all():
+            policy_dict = {
+                "name": policy.policy_name,
+                "arn": policy.arn,
+                "version": policy.default_version_id
+            }
+
+            if attached_user.arn not in managed_policies:
+                managed_policies[attached_user.arn] = [policy_dict]
+            else:
+                managed_policies[attached_user.arn].append(policy_dict)
+
+    return managed_policies
+
+
 class IAMUser(Watcher):
     index = 'iamuser'
     i_am_singular = 'IAM User'
@@ -37,6 +56,8 @@ class IAMUser(Watcher):
 
     def __init__(self, accounts=None, debug=False):
         super(IAMUser, self).__init__(accounts=accounts, debug=debug)
+        self.honor_ephemerals = True
+        self.ephemeral_paths = ["user$password_last_used"]
 
     def policy_names_for_user(self, conn, user):
         all_policy_names = []
@@ -117,10 +138,11 @@ class IAMUser(Watcher):
             all_users = []
 
             try:
+                iam_b3 = connect(account, 'iam_boto3')
+                managed_policies = all_managed_policies(iam_b3)
+
                 iam = connect(account, 'iam')
-
                 marker = None
-
                 while True:
                     users_response = self.wrap_aws_rate_limited_call(
                         iam.get_all_users,
@@ -155,6 +177,9 @@ class IAMUser(Watcher):
                 }
                 app.logger.debug("Slurping %s (%s) from %s" % (self.i_am_singular, user.user_name, account))
                 item_config['user'] = dict(user)
+
+                if managed_policies.has_key(user.arn):
+                    item_config['managed_policies'] = managed_policies.get(user.arn)
 
                 ### USER POLICIES ###
                 policy_names = self.policy_names_for_user(iam, user)
