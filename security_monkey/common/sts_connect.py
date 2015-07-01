@@ -29,6 +29,7 @@ import boto.sqs
 import boto.rds
 import boto.redshift
 import boto.vpc
+import boto.cloudtrail
 import botocore.session
 import boto3
 
