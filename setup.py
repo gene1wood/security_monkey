@@ -12,13 +12,13 @@
 #     See the License for the specific language governing permissions and
 #     limitations under the License.
 import os
-from setuptools import setup
+from setuptools import setup, find_packages
 
 setup(
     name='security_monkey',
     version='0.3.6',
     long_description=__doc__,
-    packages=['security_monkey'],
+    packages=find_packages(),
     include_package_data=True,
     zip_safe=False,
     install_requires=[
