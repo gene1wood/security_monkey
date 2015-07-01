@@ -250,5 +250,22 @@ def connect(account_name, connection_type, **args):
             security_token=role.credentials.session_token,
             **args)
 
+    if connection_type == 'cloudtrail':
+        if 'region' in args:
+            region = args['region']
+            del args['region']
+            return boto.cloudtrail.connect_to_region(
+                region.name,
+                aws_access_key_id=role.credentials.access_key,
+                aws_secret_access_key=role.credentials.secret_key,
+                security_token=role.credentials.session_token,
+                **args)
+
+        return boto.connect_cloudtrail(
+            role.credentials.access_key,
+            role.credentials.secret_key,
+            security_token=role.credentials.session_token,
+            **args)
+
     err_msg = 'The connection_type supplied (%s) is not implemented.' % connection_type
     raise Exception(err_msg)
