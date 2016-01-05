@@ -84,45 +84,58 @@ def load_user(email):
         user = User.query.filter(User.email == email).first()
     return user
 
-### Flask-Browserid ###
-from flask.ext.browserid import BrowserID
 
-def get_user(kwargs):
-    """
-    Given the response from BrowserID, finds or creates a user.
-    If a user can neither be found nor created, returns None.
-    """
-    # try to find the user
-    user = User.query.filter(User.email == kwargs['email']).first()
-    if user and kwargs['status'] == 'okay':
-        return user
-    # try to create the user
-    return create_browserid_user(kwargs)
+if app.config.get('USE_SAML'):
+    from saml import login_saml_user_idp_initiated, login_saml_user_sp_initiated
+    from flask import redirect, request, url_for, session
+    from flask.ext.login import login_user
 
-def create_browserid_user(kwargs):
-    """
-    takes browserid response and creates a user.
-    """
-    if kwargs['status'] == 'okay':
-        if kwargs['email'].endswith('@' + app.config.get('BROWSERID_DOMAIN')):
-            active = True
-        else:
-            active = False
-        user = User(email=kwargs['email'],
-                    active=active)
-        db.session.add(user)
-        db.session.commit()
-        db.session.close()
-        user = User.query.filter(User.email == kwargs['email']).first()
-        return user
-    else:
-        app.logger.error("Unable to create browserid user : %s" % kwargs)
-        return None
+    @csrf.exempt
+    @app.route("/saml/sso/<idp_name>", methods=['POST'])
+    def idp_initiated(idp_name):
+        acs_url_scheme = app.config.get('ACS_URL_SCHEME')
+        metadata_url = app.config.get('METADATA_URL')
+        user, saml_attributes = login_saml_user_idp_initiated(
+            idp_name,
+            acs_url_scheme,
+            metadata_url,
+            request.form['SAMLResponse'],
+            db)
 
-if app.config.get('USE_BROWSERID'):
-    browser_id = BrowserID()
-    browser_id.user_loader(get_user)
-    browser_id.init_app(app)
+        session['saml_attributes'] = saml_attributes
+        login_user(user)
+
+        # NOTE:
+        #   On a production system, the RelayState MUST be checked
+        #   to make sure it doesn't contain dangerous URLs!
+        if 'RelayState' in request.form:
+            url = request.form['RelayState']
+        # TODO : see what validation would need to be done to this value by
+        #        adding the chiclet to Okta and testing
+
+        # TODO : accept 'next' parameter, pass through to SAML, get back in the
+        # post, validate it and redirect to it
+        return redirect(saml.get_next_url(request))
+
+    @csrf.exempt
+    @app.route("/saml/login/<idp_name>")
+    def sp_initiated(idp_name):
+        acs_url_scheme = app.config.get('ACS_URL_SCHEME')
+        metadata_url = app.config.get('METADATA_URL')
+        redirect_url = login_saml_user_sp_initiated(idp_name,
+                                                    acs_url_scheme,
+                                                    metadata_url)
+        response = redirect(redirect_url, code=302)
+        # NOTE:
+        #   I realize I _technically_ don't need to set Cache-Control or Pragma:
+        #     http://stackoverflow.com/a/5494469
+        #   However, Section 3.2.3.2 of the SAML spec suggests they are set:
+        #     http://docs.oasis-open.org/security/saml/v2.0/saml-bindings-2.0-os.pdf
+        #   We set those headers here as a "belt and suspenders" approach,
+        #   since enterprise environments don't always conform to RFCs
+        response.headers['Cache-Control'] = 'no-cache, no-store'
+        response.headers['Pragma'] = 'no-cache'
+        return response
 
 ### Flask-Security ###
 from flask.ext.security import Security, SQLAlchemyUserDatastore
@@ -155,7 +168,7 @@ api.add_resource(AccountGetPutDelete, '/api/1/accounts/<int:account_id>')
 api.add_resource(AccountPostList, '/api/1/accounts')
 
 from security_monkey.views.distinct import Distinct
-api.add_resource(Distinct,    '/api/1/distinct/<string:key_id>')
+api.add_resource(Distinct, '/api/1/distinct/<string:key_id>')
 
 from security_monkey.views.ignore_list import IgnoreListGetPutDelete
 from security_monkey.views.ignore_list import IgnorelistListPost

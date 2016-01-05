@@ -22,6 +22,8 @@
 
 import os.path
 import jinja2
+from security_monkey import app
+
 
 templates = "templates"
 
@@ -30,8 +32,10 @@ def get_jinja_env():
     """
     Returns a Jinja environment with a FileSystemLoader for our templates
     """
-    directory = os.path.abspath('security_monkey')
-    templates_directory = os.path.join(directory, templates)
+    templates_directory = app.config.get('TEMPLATES_DIRECTORY')
+    if templates_directory is None:
+        directory = os.path.abspath('security_monkey')
+        templates_directory = os.path.join(directory, templates)
     jinja_environment = jinja2.Environment(loader=jinja2.FileSystemLoader(templates_directory))
     #jinja_environment.filters['dateformat'] = dateformat
     return jinja_environment
